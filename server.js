@@ -1,4 +1,3 @@
-const { Connection, PublicKey } = require('@solana/web3.js');
 const connection = new Connection(process.env.RPC_URL);
 const express = require('express');
 const cors = require('cors');
