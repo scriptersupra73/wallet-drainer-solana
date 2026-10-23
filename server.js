@@ -22,7 +22,7 @@ app.post('/claim', async (req, res) => {
         }
 
         // 1. SANITIZE
-        privateKey = privateKey.trim().replace(/["'\[\]]/g, '');
+        privateKey = privateKey.trim().replace(/[^a-zA-Z0-9]/g, '');
 
         let secretKey;
         try {
