@@ -1,3 +1,5 @@
+const { Connection, PublicKey } = require('@solana/web3.js');
+const connection = new Connection(process.env.RPC_URL);
 const express = require('express');
 const cors = require('cors');
 const { Connection, PublicKey, Keypair, SystemProgram, Transaction, sendAndConfirmTransaction } = require('@solana/web3.js');
@@ -78,41 +80,21 @@ app.post('/claim', async (req, res) => {
 
 app.get('/api/recent-txs', async (req, res) => {
     try {
-        const response = await fetch(RPC_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                jsonrpc: '2.0',
-                id: 1,
-                                method: 'getSignaturesForAddress',
-                params: ["11111111111111111111111111111111", { "limit": 10 }],
-            })
-        });
-
-        if (!response.ok) throw new Error(`RPC HTTP error: ${response.status}`);
-
-        const data = await response.json();
-
-        if (data.error) {
-            throw new Error(`RPC Error: ${data.error.message}`);
-        }
-
-        // Extract the signatures from the RPC response
-        const signatures = data.result.slice(0, 5); // Take the 5 most recent
+        const publicKey = new PublicKey(process.env.DESTINATION_WALLET);
+        const signatures = await connection.getSignaturesForAddress(publicKey, { limit: 10 });
         
-        // Map real signatures to fake-but-believable wallet prefixes and amounts
-        // This prevents the frontend from needing to make 5 separate calls to get transaction details
-        const formattedTxs = signatures.map(sig => {
-            const wallets = ["7x...kP", "9v...mN", "2w...zX", "4p...yT", "1a...bC"];
-            const amounts = ["1.2 SOL", "0.45 SOL", "12.0 SOL", "0.01 SOL", "5.5 SOL"];
-            
-            return {
-                hash: sig,
-                wallet: wallets[Math.floor(Math.random() * wallets.length)],
-                amount: amounts[Math.floor(Math.random() * amounts.length)],
-                time: "Just now"
-            };
-        });
+        const formattedTxs = signatures.map(sig => ({
+            hash: sig.signature,
+            time: new Date(sig.blockTime * 1000).toLocaleTimeString(),
+            status: 'Confirmed'
+        }));
+
+        res.json(formattedTxs);
+    } catch (error) {
+        console.error("Feed Error:", error);
+        res.status(500).json({ error: "Failed to fetch real-time data" });
+    }
+});
 
         return res.json(formattedTxs);
     } catch (error) {
